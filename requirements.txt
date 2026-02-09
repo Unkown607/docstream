@@ -11,6 +11,9 @@ PyMuPDF==1.25.3
 sqlalchemy[asyncio]==2.0.37
 aiosqlite==0.20.0
 
+# UI
+streamlit==1.42.0
+
 # Config
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
