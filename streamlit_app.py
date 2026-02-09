@@ -1,12 +1,9 @@
 """DocStream — AI Factuur Extractor voor ZZP'ers en MKB."""
 
-import asyncio
 import base64
 import csv
 import io
 import json
-import tempfile
-from pathlib import Path
 
 import fitz  # PyMuPDF
 import streamlit as st
