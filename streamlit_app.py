@@ -12,6 +12,16 @@ import fitz  # PyMuPDF
 import streamlit as st
 from anthropic import Anthropic
 
+from supabase_client import (
+    get_or_create_user,
+    get_monthly_usage,
+    increment_usage,
+    check_limit,
+    save_document,
+    load_user_documents,
+    PLAN_LIMITS,
+)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -24,6 +34,24 @@ st.set_page_config(
     page_icon="📄",
     layout="wide",
 )
+
+# ---------------------------------------------------------------------------
+# Auth gate — require Google login
+# ---------------------------------------------------------------------------
+
+if not st.user.is_logged_in:
+    st.title("Receiptly")
+    st.markdown("AI-powered factuur extractie voor ZZP'ers en MKB")
+    st.divider()
+    st.markdown("Log in met je Google account om te beginnen.")
+    st.button("Inloggen met Google", on_click=st.login, type="primary", use_container_width=True)
+    st.stop()
+
+# Authenticated user info
+_user_email = st.user.email
+_user_name = st.user.get("name")
+_user_picture = st.user.get("picture")
+
 
 EXTRACTION_PROMPT = """Je bent een expert document-extractor gespecialiseerd in Nederlandse en Europese facturen en bonnen.
 Je kunt ook Engelse en andere Europese facturen verwerken.
@@ -219,14 +247,34 @@ def track_event(event: str, details: str = "") -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session state
+# Session state + Supabase user bootstrap
 # ---------------------------------------------------------------------------
+
+# Upsert user in Supabase on first load of this session
+if "db_user" not in st.session_state:
+    db_user = get_or_create_user(_user_email, _user_name, _user_picture)
+    st.session_state.db_user = db_user  # None if Supabase unavailable
 
 if "history" not in st.session_state:
     st.session_state.history = []
+    # Restore history from Supabase if available
+    db_user = st.session_state.db_user
+    if db_user:
+        saved_docs = load_user_documents(db_user["id"])
+        for doc in saved_docs:
+            data = doc["extraction_data"]
+            data["_hash"] = doc["file_hash"]
+            data["_filename"] = doc["filename"]
+            data["confidence"] = doc.get("confidence", data.get("confidence"))
+            st.session_state.history.append(data)
 
 if "cache" not in st.session_state:
     st.session_state.cache = {}  # file_hash -> extraction result
+    # Pre-populate cache from restored history
+    for h in st.session_state.history:
+        fh = h.get("_hash")
+        if fh:
+            st.session_state.cache[fh] = h
 
 if "analytics" not in st.session_state:
     st.session_state.analytics = {"uploads": 0, "extractions": 0, "exports": 0}
@@ -237,9 +285,38 @@ if "analytics" not in st.session_state:
 # ---------------------------------------------------------------------------
 
 # Sidebar
+_db_user = st.session_state.db_user
+_user_plan = _db_user["plan"] if _db_user else "free"
+_user_id = _db_user["id"] if _db_user else None
+
 with st.sidebar:
     st.markdown("## Receiptly")
     st.caption("AI-powered factuur extractie voor ZZP'ers en MKB")
+    st.divider()
+
+    # User info
+    if _user_picture:
+        st.image(_user_picture, width=48)
+    st.markdown(f"**{_user_name or _user_email}**")
+    st.caption(_user_email)
+
+    # Plan & usage
+    plan_label = _user_plan.capitalize()
+    plan_limit = PLAN_LIMITS.get(_user_plan)
+    if _user_id:
+        monthly_count = get_monthly_usage(_user_id)
+    else:
+        monthly_count = 0
+
+    if plan_limit is not None and plan_limit > 0:
+        st.progress(min(monthly_count / plan_limit, 1.0))
+        st.caption(f"Plan: **{plan_label}** — {monthly_count}/{plan_limit} extracties deze maand")
+    else:
+        st.caption(f"Plan: **{plan_label}** — {monthly_count} extracties deze maand")
+
+    if st.button("Uitloggen", use_container_width=True):
+        st.logout()
+
     st.divider()
 
     uploads = st.session_state.analytics.get("uploads", 0)
@@ -283,6 +360,16 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
+    # Pre-check usage limit once (before processing any files)
+    if _user_id:
+        _allowed, _current_usage, _limit = check_limit(_user_id, _user_plan)
+        if not _allowed:
+            st.error(
+                f"Je hebt je maandelijkse limiet bereikt ({_limit} extracties). "
+                "Upgrade je plan of wacht tot volgende maand."
+            )
+            st.stop()
+
     for file_idx, uploaded_file in enumerate(uploaded_files):
         mime = uploaded_file.type
         if mime not in ALLOWED_TYPES:
@@ -320,10 +407,31 @@ if uploaded_files:
                 data = st.session_state.cache[fhash]
                 st.caption("(uit cache — geen extra API kosten)")
             else:
+                # Per-file limit check (catches mid-batch overflow)
+                if _user_id:
+                    _ok, _cur, _lim = check_limit(_user_id, _user_plan)
+                    if not _ok:
+                        st.warning(
+                            f"Maandlimiet bereikt ({_lim}). "
+                            "Dit bestand is overgeslagen."
+                        )
+                        continue
+
                 with st.spinner("Document wordt geanalyseerd door AI..."):
                     data = extract_document(file_bytes, mime)
                     st.session_state.cache[fhash] = data
                     track_event("extractions", uploaded_file.name)
+
+                    # Persist to Supabase
+                    if _user_id:
+                        increment_usage(_user_id)
+                        save_document(
+                            _user_id,
+                            fhash,
+                            uploaded_file.name,
+                            data,
+                            data.get("confidence"),
+                        )
 
             # Confidence indicator
             confidence = data.get("confidence", 0)

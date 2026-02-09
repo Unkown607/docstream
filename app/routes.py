@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import func, select
@@ -9,6 +10,15 @@ from app.extraction import extraction_service
 from app.models import Document, DocumentStatus
 from app.schemas import DocumentListResponse, DocumentResponse, ExtractionResult
 from app.storage import storage_service
+
+
+def _validate_uuid(value: str) -> str:
+    """Validate that a string is a valid UUID. Raises HTTPException if not."""
+    try:
+        uuid.UUID(value)
+        return value
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +104,7 @@ async def get_document(
     db: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
     """Retrieve a single document by ID."""
+    _validate_uuid(document_id)
     result = await db.execute(select(Document).where(Document.id == document_id))
     doc = result.scalar_one_or_none()
     if not doc:
@@ -128,6 +139,7 @@ async def delete_document(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Delete a document and its file."""
+    _validate_uuid(document_id)
     result = await db.execute(select(Document).where(Document.id == document_id))
     doc = result.scalar_one_or_none()
     if not doc:

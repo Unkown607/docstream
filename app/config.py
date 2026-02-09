@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # Limits
     free_tier_monthly_limit: int = 10
 
+    # Security
+    allowed_origins: list[str] = ["http://localhost:8501", "http://localhost:8502"]
+    api_key: str = ""  # Shared secret for FastAPI endpoints; set via API_KEY env var
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
