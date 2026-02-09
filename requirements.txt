@@ -1,0 +1,21 @@
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# AI / Extraction
+anthropic==0.42.0
+PyMuPDF==1.25.3
+
+# Database
+sqlalchemy[asyncio]==2.0.37
+aiosqlite==0.20.0
+
+# Config
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# Testing
+httpx==0.28.1
+pytest==8.3.4
+pytest-asyncio==0.25.0
